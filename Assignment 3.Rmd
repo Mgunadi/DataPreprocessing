@@ -1,12 +1,6 @@
 ---
 title: "MATH2349 Semester 2, 2018, Assignment 3"
-<<<<<<< HEAD
-author: "Matthew Gunadi - R user"
-=======
 author: "Matthew Gunadi - R user 555 777"
->>>>>>> cdd22f40e243428012d4153558c8e0c8d894c17b
-
-
 output: html_document
 ---
 ```{r echo = TRUE, message = FALSE}
