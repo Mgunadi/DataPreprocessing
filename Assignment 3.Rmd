@@ -1,0 +1,322 @@
+---
+title: "MATH2349 Semester 2, 2018, Assignment 3"
+author: "Manuel Matthew Gunadi"
+
+
+output: html_document
+---
+```{r echo = TRUE, message = FALSE}
+library(readxl)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(Hmisc)
+library(forecast)
+library(stringr)
+library(outliers)
+library(MVN)
+library(infotheo)
+library(caret)
+library(mlr)
+library(knitr)
+```
+
+# Executive summary:
+  This data-preprocessing task takes two data sources, Employment/Income of NSW residents and Mortgage repayment/Total dwellings of NsW residents, and merges them together. The merged dataset would be useful to find relationships between interrelated variables. 
+Firstly, I imported open data from xlsx files from the web. These were not in tidy format, so I manipulated and changed data types (eg. character to numeric, character to factors) to be able to get two workable tidy datasets, "Employ_income" and "mort_common_clean" (mortgage repayments). With the combined "full_data" dataframe, I conducted univariate outlier analyses on the jobs, income and total dwellings variables. I then inspected multivariate outliers for the pairs: job-income, income-dwellings, job-dwellings. Finally, the last variable, mortgage repayment frequencies describes how often a repayment amount is selected per region. The distribution of these frequencies was not normal, so I transformed this variable into a normal one.
+
+## Read employment dataset
+* The employment data comes from the Australian Bureau of Statistics (ABS) website. The title of the data is "6160.0 Table 1. JOBS and Employment income per job, by selected characteristics and by Regions and by Sex (2011-12 to 2015-16)". The particular set used is the New South Wales data  (Statistical area level 3).
+* Variables include: number of jobs ('000) and median employment income per job($) in males, females or persons, SA2 region (ID and name) and years.
+* The data can be obtained from: http://www.abs.gov.au/AUSSTATS/abs@.nsf/DetailsPage/6160.02011-12%20to%202015-16?OpenDocument 
+
+```{r }
+Employment <- read_excel("ABS_Employment.xlsx", sheet = "Table 1.5", range = "A7:Q2305")
+colnames(Employment)
+head(Employment)
+```
+* Inspect/ understand Employment data structure:
+* get class, dimensions, names and classes of columns
+* Data is a dataframe of characters: The frequency and income characters are actually numbers and will be converted to numerics. The first column contains characters of SA2 regions, which are suited as characters.
+```{r}
+class(Employment)
+dim(Employment)
+names(Employment)
+sapply(Employment,class)
+```
+
+## Read income dataset
+```{r}
+Income <- read_excel("ABS_Employment.xlsx", sheet = "Table 1.5", range = "R7:AF2305")
+colnames(Income)
+head(Income)
+```
+* Inspect/ understand Income data structure:
+* get class, dimensions and names of columns
+```{r}
+class(Income)
+dim(Income)
+names(Income)
+```
+## Data tidying 
+* Clean employment data of all persons (male and female) into tidy format.
+* First, subset the columns relating to 'persons'
+* Second, subset the rows which relate to observations for each region
+* Gather the various columns containing year ranges into one long column
+* convert into a data frame structure
+* Convert "no. of jobs" variable from character to numeric, rounded to 3 digits.
+
+```{r persons data}
+#1
+all_employment <-Employment[,c(2,13:17)]
+colnames(all_employment)[1:6] <- all_employment[1,1:6]
+#2
+all_employment <- all_employment[4:nrow(all_employment),]
+#3
+all_emp <- all_employment %>% gather("2011-12", "2012-13", "2013-14", "2014-15", "2015-16", key = "year", value = "no. of jobs")
+#4
+all_emp <- as.data.frame(all_emp)
+#5
+all_emp$`no. of jobs` <- round(as.numeric(all_emp$`no. of jobs`), digits = 3)
+#6
+head(all_emp)
+```
+
+## Data tidying part2
+*As with employment data, tidy into one long data frame with income converted to numeric (3 d.ps)
+```{r income data}
+#1
+all_Income <- bind_cols(Employment[,2],Income);
+colnames(all_Income)
+all_Income <- all_Income[,c(1,12:16)]
+colnames(all_Income)[1:6] <- all_Income[1,1:6]
+#2
+all_Income <- all_Income[4:nrow(all_Income),]
+#3
+all_Income <- all_Income %>% gather("2011-12", "2012-13", "2013-14", "2014-15", "2015-16", key = "year", value = "Income")
+#4
+all_Income <- as.data.frame(all_Income)
+#5
+all_Income$Income <- round(as.numeric(all_Income$Income), digits = 0)
+#6
+head(all_Income)
+```
+
+## Merging employment and Income datasets
+```{r}
+Employ_income <- bind_cols(all_emp, Income = all_Income$Income)
+```
+
+## Filtering data and further tidying
+* As we only have data from the 2016 census data, the most relevant time period for the employment figures is the 2015-2016 data set. Therefore, we filter the employment data for this time range.
+* convert the year range, 2015-2016 into a single year, 2016, in numeric format.
+* multiply the "no. of jobs" by 1000 as this data is thousands
+
+```{r}
+Employ_income <- Employ_income %>% filter(year == "2015-16")
+Employ_income <- Employ_income %>% mutate(year = str_replace(year, "15-", ""))
+Employ_income$year = as.numeric(Employ_income$year)
+Employ_income$`no. of jobs` <- Employ_income$`no. of jobs` * 1000
+head(Employ_income)
+```
+## Read mortgage dataset
+* Read mortgage data from ABS: 2016 Census - Monthly Mortgage Repayments & dwellings location on census night 
+* The data is ABS census data from the 2016 Australian census. It was downloaded from TableBuilder (https://auth.censusdata.abs.gov.au/webapi/jsf/login.xhtml ) using a public account. 
+* The fields selected were:
+          * all SA2s within NSW
+          * monthly mortgage repayments by dwelling
+* This data is under a creative commons licence.
+```{r}
+mortgage <- read_excel("NSW_SA2_MortgageRepayments.xlsx", range = "B9:X587")
+head(mortgage)
+```
+* Inspect/ understand mortgage data structure:
+* The dataframe consists of characters: SA2 regions (matching the employment and income data column, SA2 region), mortgage replayment ranges (more suited to factors) and frequencies (more suited to numerics).
+```{r}
+class(mortgage)
+dim(mortgage)
+names(mortgage)
+sapply(mortgage,class)
+```
+
+## Tidying the mortgage data.
+* gather the different columns relating to mortgage repayment bands into one long dataframe.
+* tidy the data so that the variable names appear at the top of the columns
+```{r }
+Repayments <- colnames(mortgage[2:22])
+mortgage2 <- mortgage %>% gather(Repayments, key = "Most common mortgage repayments", value = "Repayment reportings")
+mortgage2 <- mortgage2[2:nrow(mortgage2),]
+colnames(mortgage2)[1] <- "SA2 NAME"
+colnames(mortgage2)[2] <- "Total dwellings in SA2"
+head(mortgage2)
+
+```
+
+* Convert the mortgage monthly repayments into an ordered factor
+* Take out the fators, "Not applicable" and "Not stated" as we are more interested and concerned about knowing the repayment ranges that were stated in the census. 
+
+```{r }
+mortgage2$`Most common mortgage repayments` <- factor(mortgage2$`Most common mortgage repayments`, levels = Repayments)
+levels(mortgage2$`Most common mortgage repayments`)
+clean_mortgage <- mortgage2 %>% filter(!(`Most common mortgage repayments` %in% c("Not applicable", "Not stated")))
+# table(clean_mortgage$`Most common mortgage repayments`)
+head(mortgage2)
+```
+* Find the most commonly occuring repayment range for each region by filtering for the max number of frequency in each SA2.
+```{r }
+mortgage_common <- clean_mortgage %>% group_by(`SA2 NAME`) %>% filter(`Repayment reportings` == max(`Repayment reportings`))
+head(mortgage_common)
+
+```
+
+* Exclude duplicated regions where all repayment reportings are "0":
+```{r}
+mort_common_clean <- mortgage_common[!duplicated(mortgage_common$`SA2 NAME`),]
+head(mort_common_clean)
+```
+
+## Merging employment and mortgage datasets
+* The mortgage data does not capture as many regions as the employment data (eg. mortgage_cleaned contain 577 observations compared with all_emp_clean with 2295 observations) If we are using the combined dataset for the purpose of records, we can join all these variables. However, if pre-processing is for analysis purposes, we should subset only the regions where we have both mortgage and employment data. The next part does this merge.
+* Merge the employment dataset with the mortgage dataset by SA2 name.
+
+```{r}
+full_data <- Employ_income %>% inner_join(mort_common_clean, by="SA2 NAME")
+head(full_data)
+```
+## Treat missing values
+* Scan for missing values in SA2 name, no.of jobs and total dwellings by finding the total number of NAs per column.
+```{r}
+colSums(is.na(full_data))
+```
+* Impute the median number of jobs for missing values here as there are only such cases. The number of missing values is <5% of the data so we can be safe to exclude these observations.
+
+```{r}
+imputed_jobs <- Hmisc::impute(full_data$`no. of jobs`, fun=median)
+full_data$`no. of jobs` <- imputed_jobs
+
+imputed_income <- Hmisc::impute(full_data$Income, fun=median)
+full_data$Income <- imputed_income
+
+colSums(is.na(full_data))
+```
+
+# Treating univariate and multivariate outliers.
+## Univariate outliers:
+
+* Detect any outliers in either jobs, income or total dwellings by using Tukey's method of detection.
+```{r job_boxplot, fig.height = 4, fig.width = 4, fig.align = "center"}
+job_boxplot <- boxplot(as.numeric(full_data$`no. of jobs`), main = "Box Plot of 'no. of jobs' by region", ylab = "jobs", col = "grey")
+```
+* Find the outlier cases by using the z-score method to find when the z score is greater than 3. These are outliers.
+```{r}
+z_score_job <- full_data$`no. of jobs` %>% scores(type ="z")
+z_score_job %>% summary()
+which(abs(z_score_job) > 3)
+```
+* Handling the outliers by capping
+```{r}
+
+cap <- function(x){
+    quantiles <- quantile( x, c(.05, 0.25, 0.75, .95 ) )
+    x[ x < quantiles[2] - 1.5*IQR(x) ] <- quantiles[1]
+    x[ x > quantiles[3] + 1.5*IQR(x) ] <- quantiles[4]
+    x
+}
+
+jobs_capped <- full_data$`no. of jobs` %>% cap()
+boxplot(as.numeric(jobs_capped), main = "Box Plot of 'no. of jobs' by region", ylab = "jobs", col = "grey")
+full_data$`no. of jobs` <- jobs_capped
+
+```
+
+```{r, dwellings_boxplot, fig.height = 4, fig.width = 4, fig.align = "center"}
+dwellings_boxplot <- boxplot(as.numeric(full_data$`Total dwellings in SA2`), main = "Box Plot of 'Total dwellings' by region", ylab = "dwellings", col = "red")
+```
+
+* handle the outliers by capping.
+
+```{r, }
+dwellings_capped <- full_data$`Total dwellings in SA2` %>% cap()
+boxplot(as.numeric(dwellings_capped), main = "Box Plot of Total dwellings by region", ylab = "dwellings", col = "red")
+full_data$`Total dwellings in SA2` <- dwellings_capped
+```
+* Look for multivariate outliers by inspection using a scatterplot.
+
+```{r, scatter1, fig.height = 3, fig.width = 5, fig.align = "center"}
+scatter1 <- full_data %>% plot(`no. of jobs`~ `Total dwellings in SA2`, data = ., ylab = "jobs", xlab = "dwellings", main = "Jobs by dwellings")
+```
+
+* Look for multivariate outliers with the mvn package which uses the Chi-Square distribution critical value 
+* Treat by excluding the outliers using "showNewData"
+
+* Jobs vs. total dwellings
+```{r}
+class(full_data)
+colnames(full_data)
+full_data_sub <- full_data %>% dplyr::select(`no. of jobs`, `Total dwellings in SA2`)
+job_dwelling_clean <- mvn(data = full_data_sub, multivariateOutlierMethod = "quan", showOutliers = TRUE, showNewData = TRUE)
+```
+
+```{r}
+full_data2 <- job_dwelling_clean$newData
+head(full_data2)
+```
+
+*Multivariate outlier #2
+*income vs jobs 
+```{r scatplot2, fig.height = 4, fig.width = 4, fig.align = "center"}
+full_data_sub2 <- full_data %>% dplyr::select(`no. of jobs`, Income)
+scatplot2 <- full_data %>% plot(Income ~ `no. of jobs`, data = ., ylab = "Income", xlab = "No. of Jobs", main = "Income as a function of no. of jobs in SA2 regions") 
+```
+
+* Treat mutlivariate outlier
+```{r}
+Income_job_clean <- mvn(data = full_data_sub2, multivariateOutlierMethod = "quan", showOutliers = TRUE, showNewData = TRUE)
+```
+```{r}
+full_data3 <- Income_job_clean$newData
+## head(full_data3)  #data suppressed in order ot fit within the page limit of the assignment
+```
+
+*Multivariate outlier #3
+*income vs dwellings
+
+```{r}
+full_data_sub3 <- full_data %>% dplyr::select(`Total dwellings in SA2`, Income)
+full_data %>% plot(Income ~ `Total dwellings in SA2`, data = ., ylab = "Income", xlab = "Total dwellings in SA2", main = "Income as a function of no. of dwellings in SA2 regions") 
+```
+
+```{r}
+Income_dwelling_clean <- mvn(data = full_data_sub3, multivariateOutlierMethod = "quan", showOutliers = TRUE, showNewData = TRUE)
+```
+
+```{r}
+full_data4 <- Income_dwelling_clean$newData
+## head(full_data3)  #data suppressed in order ot fit within the page limit of the assignment
+```
+
+# Data transformations:
+*Histogram of Repayment reporting numbers
+```{r, hist, fig.height = 3, fig.width = 5, fig.align = "center"}
+hist <- hist(full_data$`Repayment reportings`, xlab = "Reportings of the most common repayment range ")
+```
+
+* The counts of the most common repayment option per region is positively skewed. It would be beneficial to transform the data ,
+* BoxCox transformation.
+* Use boxcox with lambda set as auto by the package.
+
+```{r, boxcox_repaymentfreq, fig.height = 3, fig.width = 5, fig.align = "center"}
+boxcox_repaymentfreq <- BoxCox(full_data$`Repayment reportings`, lambda = "auto")
+head(boxcox_repaymentfreq)
+hist(boxcox_repaymentfreq)
+
+```
+
+*log10 transformation
+*Alternatively use log10 as the shape is positively skewed.
+
+```{r, log_repaymentfreq, fig.height = 3, fig.width = 5, fig.align = "center"}
+log_repaymentfreq <- log10(full_data$`Repayment reportings`)
+hist(log_repaymentfreq)
+
+```
