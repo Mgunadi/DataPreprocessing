@@ -1,6 +1,6 @@
 ---
 title: "MATH2349 Semester 2, 2018, Assignment 3"
-author: "Manuel Matthew Gunadi - R user"
+author: "Matthew Gunadi - R user"
 
 
 output: html_document
